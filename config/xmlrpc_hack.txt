@@ -1,0 +1,55 @@
+How to hac... er modify Python's xmlrpc facilities to provide a readable
+Python stack traceback on a Fault. These changes apply to Python version
+2.5, which is the current version in the tablet.
+
+The changes are applied directly to system Python library code, so they
+change the behavior of all Python programs. However, these changes are not
+likely harmful to any existing programs, and are likely to be beneficial.
+However, just to be safe, you might want to back up the original file
+contents.
+
+1. Change code in the _marshaled_dispatch method of SimpleXMLRPCServer to
+   include the full traceback instead of just the error message.
+
+   File /usr/lib/python2.5/SimpleXMLRPCServer.py, line 266
+
+   Change:
+
+            # report exception back to server
+            response = xmlrpclib.dumps(
+                xmlrpclib.Fault(1, "%s:%s" % (sys.exc_type, sys.exc_value)),
+                encoding=self.encoding, allow_none=self.allow_none,
+                )
+
+   to:
+
+            # report exception back to server
+            import traceback
+            response = xmlrpclib.dumps(
+                xmlrpclib.Fault(1, traceback.format_exc()),
+                encoding=self.encoding, allow_none=self.allow_none,
+                )
+
+2. Change the __repr__ method of the Fault exception to print the string
+   of a Fault exception as-is instead of as repr(string), so the the
+   formatting of the traceback is not lost. It's really hard to understand
+   a big traceback as as single long line with \n separators!
+
+   File /usr/lib/python2.5/xmlrpclib.py, line 268:
+
+   Change:
+
+    def __repr__(self):
+        return (
+            "<Fault %s: %s>" %
+            (self.faultCode, repr(self.faultString))
+            )
+
+   to:
+
+    def __repr__(self):
+        s = self.faultString
+        return (
+            "<Fault %s: %s>" %
+            (self.faultCode, s if isinstance(s, (unicode, str)) else repr(s))
+            )

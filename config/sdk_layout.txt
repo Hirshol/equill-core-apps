@@ -1,0 +1,45 @@
+Possible EPT SDK topology -- depth-discouraged approach
+=======================================================
+
+ept.
+
+  Top-level variables
+  -------------------
+  current_doc_path              # Current doc's absolute path
+  current_doc                   # Current doc's MemphisFile object
+  current_page                  # Current page's MemphisFilePage object
+  current_gui                   # Root of current page's widget hierarchy
+  tablet                        # The singleton tablet object instance
+
+  UI classes -- all UI classes are potential event sources
+  ----------
+  Listenable
+    add_listener
+    notify_listeners
+    listeners
+  --
+  GUI -- visable
+  --
+  Component(Listenable)
+    x, y, w, h
+  Container(Component)
+    add, remove
+    elements
+  --
+  Button(Component)
+    name
+  Menu(???)
+  Panel(Container)
+    borders??, etc.
+  Page(Panel) (top of hierarchy)
+    infobar??, content??
+  ...
+  --
+  Non-GUI -- not visable, but are event sources
+  -------
+  Tablet(Listenable)            # Tablet non-gui event source
+  Camera(???)                   # Camera event source and control methods
+  Gps(???)                      # GPS event source and control methods
+
+
+

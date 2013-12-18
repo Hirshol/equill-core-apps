@@ -1,0 +1,52 @@
+#!/usr/bin/python -OO
+
+"""
+Writes rotated log files from a stream of log lines.
+"""
+
+import sys, os
+import optparse
+import subprocess as sub
+
+from logging.handlers import RotatingFileHandler
+
+default_max_bytes = 200000
+default_max_backups = 10
+
+op = optparse.OptionParser(description="Rotating log filter",
+    usage="%prog [options] log-file-path)")
+#op.add_option("-n", "--logger-name",
+#    help="Logger name (to correlate to logger config file entries)")
+op.add_option("-b", "--max-bytes", type='int', default=default_max_bytes,
+    help="Maximum bytes per file (default %s)" % default_max_bytes)
+op.add_option("-n", "--max-backups", type='int', default=default_max_backups,
+    help="Maximum number of rotated backup files (default %s)" %
+        default_max_backups)
+opts, args = op.parse_args()
+if len(args) != 1:
+    op.error('Exactly 1 positional argument expected')
+path = args[0]
+
+if not os.path.exists(path):
+	sub.Popen("touch %s" % path, shell=True)
+
+handler = RotatingFileHandler(path, maxBytes=opts.max_bytes,
+        backupCount=opts.max_backups)
+
+class Record:
+    def __init__(self, message):
+        self.message = message
+        self.exc_info = self.exc_text = None
+    def getMessage(self):
+        return self.message.rstrip()
+    def __repr__(self):
+        return 'Record(%r)' % self.getMessage()
+
+try:
+    while 1:
+        line = sys.stdin.readline()
+        if not line:
+            break
+        handler.emit(Record(line))
+except (KeyboardInterrupt, IOError):
+    pass

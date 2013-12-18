@@ -1,0 +1,30 @@
+Python modules
+==============
+
+"Launcher" process
+------------------
+launcher_daemon (interface to pyedo.daemon)
+launcher
+  loads a document and starts its DEC (currently a test DEC, later the inbox)
+dec_runner -- All interactions with DEC
+display_server -- Interface to display server functions
+library_operations -- Functions available to DEC process to implement SDK
+
+"DEC" process
+-------------
+dec_main -- "main" module of DEC process
+dec_lib -- DEC functionality not visible to SDK users
+ept -- DEC functionality visible to SDK users
+
+
+
+Pipes
+=====
+  dec_runner (launcher process)
+    - RPC server to receive "library" calls from DEC (XML-RPC)
+    - RPC client for DEC events (XML-RPC)
+    - Port to listen for display server events (ad hoc socket)
+
+  dec_lib (DEC process)
+    - RPC server for DEC events (XML-RPC)
+    - RPC client for library calls (XML-RPC)

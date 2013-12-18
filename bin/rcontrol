@@ -1,0 +1,87 @@
+#!/bin/bash
+base=$( basename "$0" )
+
+# the following command names should be symlinks
+# that point through this command
+case "$base" in
+        audiod)
+                DaemonName="AudioManager"
+                InitScript="/etc/init.d/audio_manager.sh"
+        ;;
+        camd)
+                DaemonName="Camera"
+                InitScript="/etc/init.d/camera_server.sh"
+        ;;
+        ds)
+                DaemonName="DisplayServer"
+                InitScript="/etc/init.d/display_server.sh"
+        ;;
+        launcherd)
+                DaemonName="Launcher"
+                InitScript="/etc/init.d/launcher.sh"
+        ;;
+        lud)
+                DaemonName="Listing"
+                InitScript="/etc/init.d/listing_updater.sh"
+        ;;
+        netmgr)
+                DaemonName="NetManager"
+                InitScript="/etc/init.d/network_manager.sh"
+        ;;
+        pwrmgr)
+                DaemonName="PowerManager"
+                InitScript="/etc/init.d/power_manager.sh"
+        ;;
+        syncd)
+                DaemonName="TabletSync"
+                InitScript="/etc/init.d/sync.sh"
+        ;;
+        *)
+                echo "Usage: "$base" {start|stop|restart|on|off|<other>}"
+                echo "This script intended to be run through a symlink."
+                exit 1
+        ;;
+esac
+
+if [ $# -lt 1 ] ; then
+        echo "Usage: "$base" {start|stop|restart|on|off|<other>}"
+        exit 1
+fi
+rmanage=/usr/local/bin/rmanage
+case "$1" in
+  start)
+        echo "Starting $DaemonName"
+        $rmanage +"$DaemonName"
+        ;;
+  restart)
+        echo "Restarting $DaemonName"
+        $rmanage -"$DaemonName"
+        $InitScript restart
+        $rmanage +"$DaemonName"
+        ;;
+  stop)
+        echo "Stopping $DaemonName"
+        $rmanage -"$DaemonName"
+        $InitScript stop
+        ;;
+  on)
+        echo "Enabling $DaemonName"
+        $rmanage +"$DaemonName"
+        ;;
+  off)
+        echo "Disabling $DaemonName"
+        $rmanage -"$DaemonName"
+        $InitScript stop
+        ;;
+  foreground)
+        echo "Foregrounding $DaemonName"
+        $rmanage -"$DaemonName"
+        $InitScript stop
+        $InitScript foreground
+        ;;
+  *)
+        echo "Usage: "$base" {start|stop|restart|on|off|<other>}"
+        echo "This script intended to be run through a symlink."
+        exit 1
+        ;;
+esac

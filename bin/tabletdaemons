@@ -1,0 +1,30 @@
+#!/bin/bash
+# Copyright (C) 2011 Ricoh EWS.  All rights reserved.
+
+declare -a daemons
+#set -x
+
+daemons+=("mainrestart.sh")
+
+/usr/local/bin/rwr
+if [ $# -ne 1 ] ; then
+        cmd="echo \"Usage: tabletdaemons [on|off]\""
+        eval "$cmd"
+        exit 1
+fi
+
+if [ "$1" != "on" -a "$1" != "off"  ] ; then
+        cmd="echo 'Usage: tabletdaemons [on|off]'"
+        eval "$cmd"
+        exit 1
+else 
+        for daemon in "${daemons[@]}"; do
+                if [ "$1" = "off" ] ; then 
+                        cmd="update-rc.d -f \"$daemon\" remove"
+                elif [ "$1" = "on" ] ; then 
+                        cmd="update-rc.d -f \"$daemon\" defaults 90 10"
+                fi
+                echo "$cmd"
+                eval "$cmd"
+        done
+fi

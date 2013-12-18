@@ -1,0 +1,289 @@
+#!/usr/bin/python -OO
+
+"""Script to send function calls to the camera server"""
+
+import sys, optparse, threading, time
+from types import MethodType
+
+opts = args = None
+
+def options():
+    """Parse command line options,"""
+    global opts, args
+    usage = '%prog [options] [help] [function-name-or-opcode [argument...]]'
+    descr = """Script to send function calls to the display server"""
+    parser = optparse.OptionParser(usage=usage, description=descr)
+
+    # Options for display server API flags
+    parser.add_option('-i', '--request_id',
+        type='int', default=0,
+        help='request ID')
+    parser.add_option('-r', '--report_only_error',
+        action='store_true', default=False,
+        help='report only error')
+    parser.add_option('-t', '--take_snapshot',
+        action='store_true', default=False,
+        help='take snapshot')
+
+    # The quasi-API option --wait.
+    parser.add_option('-w', '--wait',
+        action='store_true', default=False,
+        help='wait for on-read-complete or on-error event and return status')
+
+    # Other options.
+    parser.add_option('-s', '--log_stderr',
+        action='store_true', default=False,
+        help='log Python to stderr')
+    parser.add_option('-e', '--events',
+        action='store_true', default=False,
+        help='continue running and printing event information')
+    parser.add_option('--repeat_count',
+        type='int', default=1,
+        help='number of times to repeat the function call')
+    parser.add_option('--repeat_delay',
+        type='float', default=0.0,
+        help='delay in seconds between repeats of the function call')
+    #parser.add_option('--socket_address',
+    #    default='/tmp/PTU_localsocket',
+    #    help='socket address (local) to receive function call messages')
+    opts, args = parser.parse_args()
+    if not (args or opts.events):
+        parser.print_help()
+        sys.exit(2)
+
+def func_image(f):
+    args = list(f.func_code.co_varnames[:f.func_code.co_argcount])
+    flags = f.func_code.co_flags
+    if flags & 0x04:
+        args.append('*arguments')
+    if flags & 0x08:
+        args.append('**keywords')
+    defaults = f.func_defaults or ()
+    doc = f.func_doc
+    arg_string = []
+    defaults_offset = len(args) - len(defaults)
+    for i, v in enumerate(args):
+        if i < defaults_offset:
+            arg_string.append(v)
+        else:
+            arg_string.append(v + '=' + repr(defaults[i - defaults_offset]))
+    yield '%s(%s)%s' % (f.func_name, ', '.join(arg_string), ':' if doc else '')
+    if doc:
+        doc_lines = doc.split('\n')
+        if len(doc_lines) == 1:
+            yield '    """%s"""' % doc
+        else:
+            for line in doc_lines[1:]:
+                yield '    %s' % line
+            yield '    """'
+
+options()
+if opts.events:
+    opts.log_stderr = True
+
+# This enables logging in foreground (for our Python modules)
+from ew.util import ew_logging
+ew_logging.reinitialize(log_stderr=opts.log_stderr)
+logger = ew_logging.getLogger('cs_send')
+
+from ew.launcher import camera_server
+
+def connect_to_cs_events():
+
+    class CameraServerListener(threading.Thread):
+        """Display server listener thread class."""
+
+        def __init__(self):
+            super(CameraServerListener, self).__init__(
+                    name='camera server listener')
+
+        def run(self):
+            camera_server.CameraListener(self).run()
+
+        def on_have_image(self, options, request_id, image_path):
+            optns = camera_server.event_options.from_int(options)
+            logger.debug('listener.on_have_image: options=%s, image_path=%s,'
+                    'request_id=%r', optns, request_id, image_path)
+            if opts.events:
+                print ('listener.on_have_image: options=%s, request_id=%s,'
+                        ' image_path=%r' % (
+                        optns, request_id, image_path))
+
+        def on_invalid_command(self, options, request_id):
+            optns = camera_server.event_options.from_int(options)
+            logger.debug('listener.on_invalid_command: options=%s, request_id=%s',
+                    optns, request_id)
+            if opts.events:
+                print ('listener.on_invalid_command: options=%s, request_id=%s'
+                        % (optns, request_id))
+
+        def on_preview_started(self, options, request_id):
+            optns = camera_server.event_options.from_int(options)
+            logger.debug(
+                    'listener.on_preview_started: options=%s, request_id=%s',
+                    optns, request_id)
+            if opts.events:
+                print ('listener.on_preview_started: options=%s, request_id=%s'
+                        % (optns, request_id))
+
+        def on_preview_failed(self, options, request_id):
+            optns = camera_server.event_options.from_int(options)
+            logger.debug(
+                    'listener.on_preview_failed: options=%s, request_id=%s',
+                    optns, request_id)
+            if opts.events:
+                print ('listener.on_preview_failed: options=%s, request_id=%s'
+                        % (optns, request_id))
+
+        def on_preview_stopped(self, options, request_id):
+            optns = camera_server.event_options.from_int(options)
+            logger.debug(
+                    'listener.on_preview_stopped: options=%s, request_id=%s',
+                    optns, request_id)
+            if opts.events:
+                print ('listener.on_preview_stopped: options=%s, request_id=%s'
+                        % (optns, request_id))
+
+        def on_cannot_write_image(self, options, request_id):
+            optns = camera_server.event_options.from_int(options)
+            logger.debug(
+                    'listener.on_cannot_write_image: options=%s, request_id=%s',
+                    optns, request_id)
+            if opts.events:
+                print ('listener.on_preview_stopped: options=%s, request_id=%s'
+                        % (optns, request_id))
+
+        def on_shutter(self, options, request_id):
+            optns = camera_server.event_options.from_int(options)
+            logger.debug('listener.on_shutter: options=%s, request_id=%s',
+                    optns, request_id)
+            if opts.events:
+                print 'listener.on_shutter: options=%s, request_id=%s' % (
+                        optns, request_id)
+
+    # Start the thread.
+    cs_event_thread = CameraServerListener()
+    cs_event_thread.setDaemon(True)
+    cs_event_thread.start()
+    logger.info('Camera server event listener thread started')
+    return cs_event_thread
+
+# If the wait option is invoked or the event option (-e) is specified, start
+# an event listener.
+event_listener = None
+if opts.wait or opts.events:
+    event_listener = connect_to_cs_events()
+
+# From the command line arguments, form a CS function call.
+try:
+    if args:
+        if not opts.request_id:
+            sys.exit('A non-zero request ID must be supplied')
+        cs = camera_server.CameraSender()
+        function_name = args.pop(0)
+        help = False
+        if function_name == 'help':
+            if not args:
+                for name, value in sorted(cs.__class__.__dict__.iteritems()):
+                    if hasattr(value, 'opcode'):
+                        print 'opcode:', value.opcode,
+                        for line in func_image(value):
+                            print line
+                sys.exit()
+            help = True
+            function_name = args[0]
+        function = opcode = None
+        try:
+            opcode = int(function_name, 0)
+        except ValueError:
+            pass
+        if opcode is not None:
+            # Find the function with the given opcode.
+            for name in dir(cs):
+                value = getattr(cs, name)
+                if isinstance(value, MethodType):
+                    if getattr(value, 'opcode', None) == opcode:
+                        function = value
+                        function_name = name
+                        break
+            else:
+                sys.exit('No function with opcode: %s' % opcode)
+        else:
+            # Get the function with the given name.
+            try:
+                function = getattr(cs, function_name)
+            except AttributeError, e:
+                sys.exit('No such function name: %s' % e)
+        if help:
+            print '\n'.join(func_image(function)).replace('(self, ', '(', 1)
+            sys.exit()
+
+        # Convert all command line args that look like integers to
+        # integer type. Args starting with "@" always have their initial
+        # "@" removed and are interpreted as strings -- this is the way
+        # to enter a string that looks like an integer (e.g. arg="@123"
+        # => "123"; arg="123" => 123; arg="@" => "").
+        converted_args = []
+        for arg in args:
+            if arg.startswith('@'):
+                arg = arg[1:]
+            else:
+                try:
+                    arg = int(arg, 0)
+                except ValueError:
+                    pass
+            converted_args.append(arg)
+        converted_args = tuple(converted_args)
+
+        # Create a dictionary of options for the function call.
+        option_names = ['report_only_error', 'take_snapshot']
+        cs_options = {}
+        for name in option_names:
+            if getattr(opts, name):
+                cs_options[name] = True
+        if opts.wait:
+            cs_options['wait'] = True
+        elif opts.request_id:
+            cs_options['request_id'] = opts.request_id
+
+        # Print the call, nicely formatted.
+        s = []
+        for arg in converted_args:
+            s.append(repr(arg))
+        for item in cs_options.iteritems():
+            s.append('%s=%r' % item)
+        print '%s(%s)...' % (function_name, ', '.join(s))
+
+        # Call the function and print the result.
+        repeat_count = max(opts.repeat_count, 1)
+        multiple = repeat_count > 1
+        if multiple:
+            repeat_delay = opts.repeat_delay
+            delay = 0.0
+            for n in xrange(1, repeat_count + 1):
+                time.sleep(delay)
+                t0 = time.time()
+                result = function(*converted_args, **cs_options)
+                t = time.time() - t0
+                print '[%d] => %r  (%.3f sec)' % (n, result, t), \
+                        (time.strftime('%Y-%m-%d %H:%M:', time.localtime(t0)) +
+                            "%02.3f" % (t0 % 60.0))
+                delay = repeat_delay
+        else:
+            t0 = time.time()
+            result = function(*converted_args, **cs_options)
+            t = time.time() - t0
+            print '=> %r  (%.3f sec)' % (result, t), \
+                    (time.strftime('%Y-%m-%d %H:%M:', time.localtime(t0)) +
+                        "%02.3f" % (t0 % 60.0))
+    if event_listener:
+        event_listener.join()
+except KeyboardInterrupt:
+    pass
+if opts.wait:
+    print '''
+(Ignore possible error output as display server might attempt to send events
+after ds_send terminates.)
+'''
+
+# :mode=python:  # Editor setup for JEdit

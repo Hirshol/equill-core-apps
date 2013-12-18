@@ -1,0 +1,325 @@
+#!/usr/bin/python -OO
+
+"""Script to send function calls to the display server"""
+
+import sys, os, optparse, threading, time
+from types import MethodType
+
+opts = args = None
+
+def options():
+    """Parse command line options,"""
+    global opts, args
+    usage = '%prog [options] [help] [function-name-or-opcode [argument...]]'
+    descr = """Script to send function calls to the display server"""
+    parser = optparse.OptionParser(usage=usage, description=descr)
+
+    # Options for display server API flags
+    parser.add_option('-c', '--clear_ink',
+        action='store_true', default=False,
+        help='clear ink in updated region')
+    parser.add_option('-d', '--delete_image',
+        action='store_true', default=False,
+        help='delete source image file after finished reading it')
+    parser.add_option('-p', '--disable_page_turn',
+        action='store_true', default=False,
+        help='disable page-turn')
+    parser.add_option('-f', '--flash',
+        action='store_true', default=False,
+        help='use flashing (deghosting) waveform to draw any resulting changes')
+    parser.add_option('-l', '--force_reload',
+        action='store_true', default=False,
+        help="reload the display server's internally cached pages"
+                " for the document")
+    parser.add_option('-r', '--redraw',
+        action='store_true', default=False,
+        help='redraw entire page')
+    parser.add_option('-i', '--request_id',
+        type='int', default=0,
+        help='request ID')
+
+    # The quasi-API option --wait.
+    parser.add_option('-w', '--wait',
+        action='store_true', default=False,
+        help='wait for on-read-complete or on-error event and return status')
+
+    # Other options.
+    parser.add_option('-s', '--log_stderr',
+        action='store_true', default=False,
+        help='log Python to stderr')
+    parser.add_option('-n', '--new_protocol',
+        action='store_true', default=True,
+        help='use new DS API and event protocol (the default)')
+    parser.add_option('-o', '--old_protocol',
+        action='store_true', default=False,
+        help='use old DS API and event protocol')
+    parser.add_option('-e', '--events',
+        action='store_true', default=False,
+        help='continue running and printing event information')
+    parser.add_option('--repeat_count',
+        type='int', default=1,
+        help='number of times to repeat the function call')
+    parser.add_option('--repeat_delay',
+        type='float', default=0.0,
+        help='delay in seconds between repeats of the function call')
+    parser.add_option('--socket_address',
+        default='/tmp/PTU_localsocket',
+        help='socket address (local) to receive function call messages')
+    opts, args = parser.parse_args()
+    if not (args or opts.events):
+        parser.print_help()
+        sys.exit(2)
+
+def func_image(f):
+    args = list(f.func_code.co_varnames[:f.func_code.co_argcount])
+    flags = f.func_code.co_flags
+    if flags & 0x04:
+        args.append('*arguments')
+    if flags & 0x08:
+        args.append('**keywords')
+    defaults = f.func_defaults or ()
+    doc = f.func_doc
+    arg_string = []
+    defaults_offset = len(args) - len(defaults)
+    for i, v in enumerate(args):
+        if i < defaults_offset:
+            arg_string.append(v)
+        else:
+            arg_string.append(v + '=' + repr(defaults[i - defaults_offset]))
+    yield '%s(%s)%s' % (f.func_name, ', '.join(arg_string), ':' if doc else '')
+    if doc:
+        doc_lines = doc.split('\n')
+        if len(doc_lines) == 1:
+            yield '    """%s"""' % doc
+        else:
+            for line in doc_lines[1:]:
+                yield '    %s' % line
+            yield '    """'
+
+options()
+if opts.events:
+    opts.log_stderr = True
+opts.new_protocol = not opts.old_protocol
+
+os.environ['EW_NEW_DS'] = 'true' if opts.new_protocol else 'false'
+
+# This enables logging in foreground (for our Python modules)
+from ew.util import ew_logging
+ew_logging.reinitialize(log_stderr=opts.log_stderr)
+logger = ew_logging.getLogger('ds_send')
+
+from ew.launcher import display_server
+
+display_server.DSDatagramSender._pen_track_update_options['ptu_local_address'] = \
+        opts.socket_address
+
+def connect_to_old_ds_events():
+    """Start a listener for display server events.
+    This is a minimal "stroke listener" to enable using the "wait" option.
+    """
+    from ew.util import comms
+    from ew import e_ink
+
+    class DSDatagramSenderListener(threading.Thread):
+        """Display server listener thread class."""
+
+        def __init__(self):
+            """Initialize an instance."""
+            super(DSDatagramSenderListener, self).__init__(
+                    name='old ds listener')
+            def init_strokes():
+                return e_ink.Strokes(
+                        StrokeListener={'eventListener': self,
+                            'blocking': True})
+            self.strokes = comms.try_until_connected('display server',
+                    init_strokes, logger=logger, try_count=None)
+            self.strokes.time_threshold = 0.0
+            self.ready = threading.Event()
+
+        def run(self):
+            """Main method for this thread."""
+            try:
+                logger.debug('Now listening for display server events')
+                self.ready.set()
+                while 1:
+                    self.strokes.stroke_listener.get_stroke()
+            except Exception:
+                logger.exception(
+                        'Exception in display server listener thread')
+                raise
+
+        def wait_until_ready(self):
+            self.ready.wait()
+
+        def onReadComplete(self, request_id):
+            display_server.notify_event('onReadComplete', request_id)
+            logger.debug('onReadComplete: request_id=%d', request_id)
+
+        def onError(self, request_id, error_code):
+            display_server.notify_event('onError', request_id, error_code)
+            logger.debug('onError: request_id=%d, error_code=%s',
+                    request_id, error_code)
+
+    # Start the thread.
+    ds_event_thread = DSDatagramSenderListener()
+    ds_event_thread.setDaemon(True)
+    ds_event_thread.start()
+    logger.info('Display server event listener thread started')
+    return ds_event_thread
+
+def connect_to_new_ds_events():
+    import ew.launcher.ds_event_dispatch as ds_event_dispatch
+
+    class DSDatagramSenderListener(threading.Thread):
+        """Display server listener thread class."""
+
+        def __init__(self):
+            super(DSDatagramSenderListener, self).__init__(
+                    name='new ds listener')
+
+        def run(self):
+            ds_event_dispatch.listen_for_events(self)
+
+        def on_read_complete(self, request_id):
+            display_server.notify_event('onReadComplete', request_id)
+            logger.debug('listener.on_read_complete: request_id=%d', request_id)
+            if opts.events:
+                print 'listener.on_read_complete: request_id=%d' % request_id
+
+        def on_error(self, request_id, error_code):
+            display_server.notify_event('onError', request_id, error_code)
+            logger.debug('listener.on_error: request_id=%d, error_code=%s',
+                    request_id, error_code)
+            if opts.events:
+                print 'listener.on_error: request_id=%d, error_code=%s' % (
+                        request_id, error_code)
+
+    # Start the thread.
+    ds_event_thread = DSDatagramSenderListener()
+    ds_event_thread.setDaemon(True)
+    ds_event_thread.start()
+    logger.info('Display server event listener thread started')
+    return ds_event_thread
+
+# If the wait option is invoked, start an event listener.
+event_listener = None
+if opts.wait or opts.events:
+    if opts.new_protocol:
+        event_listener = connect_to_new_ds_events()
+    else:
+        event_listener = connect_to_old_ds_events()
+        event_listener.wait_until_ready()
+
+# From the command line arguments, form a DS function call.
+try:
+    if args:
+        ds = display_server.DSDatagramSender()
+        function_name = args.pop(0)
+        help = False
+        if function_name == 'help':
+            if not args:
+                for name, value in sorted(ds.__class__.__dict__.iteritems()):
+                    if hasattr(value, 'opcode'):
+                        print 'opcode:', value.opcode,
+                        for line in func_image(value):
+                            print line
+                sys.exit()
+            help = True
+            function_name = args[0]
+        function = opcode = None
+        try:
+            opcode = int(function_name, 0)
+        except ValueError:
+            pass
+        if opcode is not None:
+            # Find the function with the given opcode.
+            for name in dir(ds):
+                value = getattr(ds, name)
+                if isinstance(value, MethodType):
+                    if getattr(value, 'opcode', None) == opcode:
+                        function = value
+                        function_name = name
+                        break
+            else:
+                sys.exit('No function with opcode: %s' % opcode)
+        else:
+            # Get the function with the given name.
+            try:
+                function = getattr(ds, function_name)
+            except AttributeError, e:
+                sys.exit('No such function name: %s' % e)
+        if help:
+            f = function if opts.new_protocol else function.original_func
+            print '\n'.join(func_image(f)).replace('(self, ', '(', 1)
+            sys.exit()
+
+        # Convert all command line args that look like integers to
+        # integer type. Args starting with "@" always have their initial
+        # "@" removed and are interpreted as strings -- this is the way
+        # to enter a string that looks like an integer (e.g. arg="@123"
+        # => "123"; arg="123" => 123; arg="@" => "").
+        converted_args = []
+        for arg in args:
+            if arg.startswith('@'):
+                arg = arg[1:]
+            else:
+                try:
+                    arg = int(arg, 0)
+                except ValueError:
+                    pass
+            converted_args.append(arg)
+        converted_args = tuple(converted_args)
+
+        # Create a dictionary of options for the function call.
+        option_names = ['clear_ink', 'delete_image', 'disable_page_turn', 'flash',
+                'force_reload', 'redraw']
+        ds_options = {}
+        for name in option_names:
+            if getattr(opts, name):
+                ds_options[name] = True
+        if opts.wait:
+            ds_options['wait'] = True
+        elif opts.request_id:
+            ds_options['request_id'] = opts.request_id
+
+        # Print the call, nicely formatted.
+        s = []
+        for arg in converted_args:
+            s.append(repr(arg))
+        for item in ds_options.iteritems():
+            s.append('%s=%r' % item)
+        print '%s(%s)...' % (function_name, ', '.join(s))
+
+        # Call the function and print the result.
+        repeat_count = max(opts.repeat_count, 1)
+        multiple = repeat_count > 1
+        if multiple:
+            repeat_delay = opts.repeat_delay
+            delay = 0.0
+            for n in xrange(1, repeat_count + 1):
+                time.sleep(delay)
+                t0 = time.time()
+                result = function(*converted_args, **ds_options)
+                t = time.time() - t0
+                print '[%d] => %r  (%.3f sec)' % (n, result, t), \
+                        (time.strftime('%Y-%m-%d %H:%M:', time.localtime(t0)) +
+                            "%02.3f" % (t0 % 60.0))
+                delay = repeat_delay
+        else:
+            t0 = time.time()
+            result = function(*converted_args, **ds_options)
+            t = time.time() - t0
+            print '=> %r  (%.3f sec)' % (result, t), \
+                    (time.strftime('%Y-%m-%d %H:%M:', time.localtime(t0)) +
+                        "%02.3f" % (t0 % 60.0))
+    if opts.events:
+        time.sleep(999999999.0)
+except KeyboardInterrupt:
+    pass
+if opts.wait:
+    print '''
+(Ignore possible error output as display server might attempt to send events
+after ds_send terminates.)
+'''
+
+# :mode=python:  # Editor setup for JEdit

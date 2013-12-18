@@ -1,0 +1,34 @@
+#!/usr/bin/python -OO
+
+"""
+Checks that dates of a sequence of log lines are monotonically increasing,
+printing diagnostic info when exceptions are found.
+"""
+
+import sys, re
+
+from ew_log_times import EwLogTimes
+
+args = sys.argv[1:]
+if not args:
+    print >>sys.stderr, \
+        'Args: fudge (in "time value" units, approximately milliseconds)'
+    sys.exit(2)
+
+fudge = int(args[0])
+
+prev_time_value = 0
+prev_line = None
+flaw_count = 0
+for line_index, line in enumerate(sys.stdin):
+    time_value = EwLogTimes.time_value(line)
+    if time_value:
+        if time_value < prev_time_value - fudge:
+            flaw_count += 1
+            print flaw_count, '----------------------------------------'
+            print 'Time decreasing, line %d:' % (line_index + 1)
+            print ' ', prev_line.rstrip()
+            print ' ', line.rstrip()
+        prev_line = line
+        prev_time_value = time_value
+print '\nFlaw count:', flaw_count

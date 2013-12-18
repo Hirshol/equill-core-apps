@@ -1,0 +1,332 @@
+#!/usr/bin/python -OO
+
+"""
+Facilitates viewing of EW log records in convenient ways:
+  - Allows viewing log lines from rotated and possibly compressed logs as
+    a single stream.
+  - Allows viewing of multiple log streams with their records merged in
+    chronological order.
+  - Filters the viewed lines by
+    - Allowing output of lines only after a specified date-time.
+    - Allowing specification of limit of how many most recent rotated log
+      segments to view.
+"""
+
+import sys, os, re, time
+from glob import glob
+
+from ew_log_times import EwLogTimes
+
+file_headings = False
+
+times_object = EwLogTimes
+'''
+  times_object -- A times object that satisfies the following interface:
+        """Operations on time field of EW logs."""
+        is_dated_line(line):
+            """Return whether line is a dated log line."""
+        time_value(line):
+            """
+            If line is a dated log line, return an integer which is
+            monotonically increasing with successive dates, otherwise
+            return None.
+            """
+        compute_time_value(yr, mo, da, hr, mi, se, ms):
+            """
+            Compute a time value from a date.
+            Returns an integer which is monotonically increasing with
+            successive dates.
+            """
+        large_time_value():
+            """
+            Return a time value larger than any value calculated from a
+            date expected to be seen in the viewed logs.
+            """
+'''
+
+start_time_value = None
+
+class MergedLogRecords(object):
+    """
+    An iterable producing lines of several log file sets merged in
+    chronological order.
+    """
+
+    def __init__(self, spec_list):
+        """
+        Parameters:
+          spec_list -- Iterable with elements (log_name_pattern, max-files).
+        """
+        self.spec_list = spec_list
+        self.logical_record_producers = [
+                LogicalLogRecords(log_name_pattern, max_files) for
+                        log_name_pattern, max_files in spec_list]
+
+    def __iter__(self):
+        """
+        Returns iterator that produces lines from multiple specified log files
+        (including rotated, compressed files) all merged in chronological order.
+        """
+        while 1:
+            oldest_producer_index = self._find_oldest()
+            if oldest_producer_index is None:
+                break
+            producer = self.logical_record_producers[oldest_producer_index]
+            for line in producer.current_record[1]:
+                if log_names:
+                    yield line + ' [' + producer.log_name + ']'
+                else:
+                    yield line
+            producer.next_record()
+
+    def _find_oldest(self):
+        oldest_time = times_object.large_time_value()
+        index = None
+        for i, producer in enumerate(self.logical_record_producers):
+            line_time = producer.current_record[0]
+            if line_time < oldest_time:
+                oldest_time = line_time
+                index = i
+        return index
+
+
+class LogicalLogRecords(object):
+    """
+    Gathers "logical records" from a log file, where a logical record is a
+    group of successive log lines, the first of which contains a log date,
+    followed by lines that do not have a date up to and not including
+    the next line that has a date, or if no following lines have a date,
+    to end of file.
+    """
+
+    def __init__(self, log_name_pattern, max_files=None):
+        '''
+        Parameters:
+          log_name_pattern -- A filename pattern that matches the "root"
+            part of a sequence of log files, excluding any .number of .gz
+            suffix.
+          max_files -- The maximum number of file to view from this
+            sequence of log files. The specified number of most recent files
+            are viewed.
+        '''
+        self.log_name_pattern = log_name_pattern
+        self.log_name = os.path.basename(log_name_pattern)
+        self.line_producer = log_lines(log_name_pattern, max_files)
+        self.pending_lines = None
+        self.current_record = None
+
+        # Skip until a line starting with a date and prime the
+        # pending_lines list.
+        for line in self.line_producer:
+            if times_object.is_dated_line(line):
+                self.pending_lines = [line]
+                break
+        self.next_record()
+
+    def next_record(self):
+        """
+        Read a "logical record", which is a list of lines starting with a dated
+        log line. Returns (log_time_value, [line,...]).
+        """
+        if not self.pending_lines:
+            record = times_object.large_time_value(), []
+        else:
+            for line in self.line_producer:
+                if times_object.is_dated_line(line):
+                    value = self.pending_lines[:]
+                    self.pending_lines[:] = [line]
+                    record = times_object.time_value(value[0]), value
+                    break
+                else:
+                    self.pending_lines.append(line)
+            else:
+                value = self.pending_lines[:]
+                self.pending_lines[:] = []
+                record = times_object.time_value(value[0]), value
+        self.current_record = record
+        return record
+
+    def __iter__(self):
+        """Produces logical records."""
+        while 1:
+            record = self.next_record()
+            if not record[1]:
+                break
+            yield record
+
+
+def log_lines(pat, max_files=None):
+    """
+    Return an iterator that produces lines from specified log files
+    (including rotated, compressed files) in chronological order.
+    """
+
+    paths = get_log_paths(pat, max_files)
+    past_start = not start_time_value
+
+    # Loop through the path list, producing its lines.
+    for path in paths:
+        if file_headings:
+            yield ''
+            yield "######## %s ########" % path
+            yield ''
+
+        # Get the right stream for this type of file.
+        f = get_path_input_stream(path)
+
+        # Loop to read lines of stream.
+        try:
+            for line in f:
+                if past_start:
+                    yield line.rstrip('\r\n')
+                else:
+                    line_time_value = times_object.time_value(line)
+                    if line_time_value and line_time_value >= start_time_value:
+                        past_start = True
+                        yield line.rstrip('\r\n')
+        finally:
+            f.close()
+
+
+def get_log_paths(pat, max_files=None):
+    """Return a list of log paths to scan, sorted chronologically.
+    If "max_files" is not None, designates the max number of most recent
+    log files to scan.
+    """
+
+    # Get the list of all log files, including rotated, that pertain to this
+    # filename pattern.
+    paths = (glob(pat) + glob(pat + '.[0-9]') + glob(pat + '.[0-9][0-9]') +
+            glob(pat + ".gz") + glob(pat + ".[0-9].gz") +
+            glob(pat + ".[0-9][0-9].gz"))
+    paths = list(set(paths))
+
+    # Sort the paths in chronological order.
+    pat = re.compile(r'(?:\.(\d+))?(?:\.gz)?$')
+    def sort_key(name):
+        ordinal = pat.search(name).group(1)
+        return int(ordinal) if ordinal else 0
+    paths.sort(key=sort_key, reverse=True)
+
+    # If a maximum number of files was specified, remove older paths that
+    # exceed the max.
+    if max_files:
+        paths = paths[-max_files:]
+    if start_time_value:
+        paths = paths_after_time(start_time_value, paths)
+    return paths
+
+
+def get_path_input_stream(path):
+    # Get the right stream for this type of file.
+    if path.endswith(".gz"):
+        try:
+            import gzip
+            f = gzip.open(path, 'rU')
+        except InportError:
+            f = os.popen('zcat "' + path + '"', 'rU')
+    else:
+        f = open(path, 'rU')
+    return f
+
+
+def paths_after_time(target_time_value, paths):
+    for i, path in enumerate(reversed(paths)):
+        f = get_path_input_stream(path)
+        # Skip until a line starting with a date.
+        for line in f:
+            if times_object.is_dated_line(line):
+                file_first_time = times_object.time_value(line)
+                if file_first_time < target_time_value:
+                    return paths[-(i + 1):]
+    return paths
+
+
+class EwMergedLogRecords(MergedLogRecords):
+    """MergedLogRecords subclass that works for EW Python logs."""
+
+    def __init__(self, spec_list):
+        MergedLogRecords.__init__(self, spec_list)
+
+
+# Pattern to recognize input date-time.
+_input_date_pat = re.compile(
+        r'(20\d{2})\-(\d{2})\-(\d{2})'
+        r'(?:[ T](\d{2})\:(\d{2})\:(\d{2})(?:[\.\,](\d+))?|)$')
+
+
+def main():
+    """
+    Prints lines from specified log files (including rotated, compressed
+    files) in chronological order.
+    """
+    global file_headings, start_time_value, log_names
+    import optparse
+    description = "Prints and chronologically merges lines of rotated logs"
+    usage = """\
+%prog [options] (path-root [max-files])... (-h for options help)
+  path-root -- Root name of log file (excluding .number or .gz suffix)
+  max-files -- Print only "max-files" most recent log files
+"""
+    op = optparse.OptionParser(usage=usage, description=description)
+    op.add_option("-a", "--all-logs",
+        action="store_true", default=False,
+        help="Merge all EW logs (same as arg: <logs-directory>/*.log)")
+    op.add_option("-d", "--logs-directory",
+        default='/data/logs',
+        help="Directory containing logs (for --all-logs option)")
+    op.add_option("-t", "--start-time",
+        help=
+        "Print log records dated after start-time (YYYY-MM-DD[ hh-mm-ss[.fff]]")
+    op.add_option("-m", "--max-files",
+        type='int',
+        help="Default max-files (see max-value positional argument)")
+    op.add_option("-n", "--log-names",
+        action="store_true", default=False,
+        help="Print the source log name pattern on each line when merging")
+    op.add_option("-s", "--file-headings",
+        action="store_true", default=False,
+        help="Print a heading before each visited log file")
+    opts, args = op.parse_args()
+    if opts.all_logs:
+        args.extend(glob(os.path.join(opts.logs_directory, '*.log')))
+    if not args:
+        op.print_help(sys.stderr)
+        sys.exit(2)
+    file_headings = opts.file_headings
+    log_names = opts.log_names
+    specs = []
+    i = 0
+    while i < len(args):
+        pat = args[i]
+        try:
+            max_files = int(args[i + 1])
+            i += 2
+        except (ValueError, IndexError):
+            max_files = opts.max_files
+            i += 1
+        specs.append((pat, max_files))
+    start_time_value = opts.start_time
+    if start_time_value:
+        m = _input_date_pat.match(start_time_value)
+        if not m:
+            op.error('Bad start time format')
+        try:
+            start_time_value = times_object.compute_time_value(
+                    *tuple(int(x) if x else 0 for x in m.group(*xrange(1, 8))))
+        except ValueError, e:
+            op.error('Bad start time field (%s)' % e)
+    if len(specs) == 1:
+        spec0 = specs[0]
+        producer = log_lines(spec0[0], spec0[1])
+    else:
+        producer = EwMergedLogRecords(specs)
+    try:
+        for line in producer:
+            print line
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

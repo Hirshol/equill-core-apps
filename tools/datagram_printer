@@ -1,0 +1,42 @@
+#!/usr/bin/python
+
+# Script to simply receive and print datagrams.
+
+import sys, os, socket
+from optparse import OptionParser
+from itertools import count
+
+op = OptionParser(description='Receives and prints datagrams')
+op.add_option('-a', '--address',
+    default="/tmp/datagram-test",
+    help="address (Unix file path)")
+op.add_option('-m', '--max_size',
+    type='int', default=1024,
+    help='maximum datagram size')
+op.add_option('-f', '--force_reuse',
+    action='store_true', default=False,
+    help='force reuse of existing socket address')
+opts, args = op.parse_args()
+address = opts.address
+max_size = opts.max_size
+server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+try:
+    #server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if os.path.exists(address):
+        if not opts.force_reuse:
+            y = raw_input('Socket address %s exists -- ok to use? ' % address)
+            if not y.lower().startswith('y'):
+                sys.exit()
+        os.remove(address)
+    server.bind(address)
+    for n in count(1):
+        datagram = server.recv(max_size)
+        if not datagram:
+            break
+        print '[%d] Datagram length %d %r' % (n, len(datagram), datagram)
+except KeyboardInterrupt:
+    pass
+finally:
+    server.shutdown(socket.SHUT_RDWR)
+    server.close()
+    os.remove(address)

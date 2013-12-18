@@ -1,0 +1,109 @@
+#!/usr/bin/python -OO
+
+import subprocess, time, sys, os
+from ew.util.ew_hardware import Fusion
+
+def initialize_fusion_module():
+    """Initiate the fusion module"""
+    subprocess.Popen(["initfusion"],
+            stdout = subprocess.PIPE).communicate()[0]
+    time.sleep(2)
+
+def poff():
+    """Turn off ppp connection"""
+    subprocess.Popen(["poff"],
+            stdout = subprocess.PIPE).communicate()[0]
+            
+def wait_for_chat():
+    """3G negotiation in process"""
+    wait_for_handshake = True
+    print "waiting for negotiation chat"
+    while wait_for_handshake:
+        output = ""
+        try:
+            output = subprocess.Popen(["pgrep", "-f", "/usr/sbin/chat -v -t60 -f /etc/chatscripts/fusion5D_v2_first_time"],
+                    stdout = subprocess.PIPE).communicate()[0]
+        except Exception, e:
+            print "%r" % e
+        if output.strip() == "":
+            wait_for_handshake = False
+        else:
+            sys.stdout.write(".")
+            sys.stdout.flush()
+            time.sleep(5)
+    sys.stdout.write("\n")
+
+def wait_for_negotiation():
+    """3G negotiation in process"""
+    wait_for_handshake = True
+    print "waiting for negotiation first time"
+    retry = 0
+    while wait_for_handshake:
+        output = ""
+        try:
+            output = subprocess.Popen(["pgrep", "-f", "/usr/sbin/pppd call fusion5D_v2_first_time"],
+                    stdout = subprocess.PIPE).communicate()[0]
+        except Exception, e:
+            print "%r" % e
+        if output.strip() == "" or retry > 10:
+            poff()
+            wait_for_handshake = False
+        else:
+            retry += 1
+            sys.stdout.write(".")
+            sys.stdout.flush()
+            time.sleep(5)
+    sys.stdout.write("\n")
+
+def initiate_cell_connection():
+    """Initiate 3G connection"""
+    subprocess.Popen(["pon", "fusion5D_v2_first_time"],
+            stdout = subprocess.PIPE).communicate()[0]
+
+def cell_provision():
+    """Provision a 3G tablet for data usage"""
+    
+    if not os.path.exists(Fusion.PORT3Gdata) or \
+	        not os.path.exists(Fusion.PORT3Gat):
+	    initialize_fusion_module()
+
+    fusion = None
+    meid = ""
+    try:
+        fusion = Fusion()
+        meid = fusion.meid()
+    except Exception:
+        print "Failed to get the fusion module"
+        exit(1)
+
+    if fusion is not None and not fusion.is_provisioned():
+        fusion.__close__()
+        initiate_cell_connection()
+	
+    wait_for_chat()
+    wait_for_negotiation()
+	
+    fusion = None
+    retry = 0
+	# I get a case where the first time connection sticks around;
+	# only try five times and quit.
+    while retry < 5:
+        try:
+            fusion = Fusion()
+            meid = fusion.meid()
+            break
+        except Exception: 
+            print "Failed to get the fusion module"
+            retry += 1
+            time.sleep(2)
+    
+    if fusion is not None and fusion.is_provisioned():
+        print "MEID: %r\nPROFILE: %r" % (meid, fusion.profile_1())
+        fusion.__close__()
+    else:
+        print "Failed to provision with provider (%s)" % (meid)
+
+
+if __name__ == "__main__":
+    cell_provision()
+    exit(0)

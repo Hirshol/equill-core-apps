@@ -1,0 +1,48 @@
+#!/usr/bin/env python
+
+import os,sys
+
+EXCPATH = "/tmp/restartexceptions.txt"
+
+# read exceptions file
+if os.path.exists(EXCPATH):
+    f = open(EXCPATH,"r")
+    exclist = f.read().split()
+    f.close()
+else:
+    exclist = []
+    
+excset = set(exclist)
+    
+
+for a in sys.argv[1:]:
+    action = a[0]
+    name = a[1:]
+    if action is "-":
+        print "Adding", name, "to exception list"
+        excset.add(name)
+    elif action is "+":
+        print "Removing", name, "from exception list"
+        excset.discard(name)
+    elif a == "list":
+        print "Restart Engine Exceptions\n------- ------ ----------"
+        print excset
+    elif a == "reset":
+        print "Resetting exception list"
+        excset = set([])
+    else:
+        print """Usage --
+rmanage <action*>
+
+where actions can be:
+
+-<servername>                       # adds servername to list of restart exceptions
++<servername>                       # removes servername from exception list
+list                                # shows current list of exceptions
+reset                               # empties server exception list
+"""
+
+f = open(EXCPATH,"w")
+for l in excset:                                                               
+       f.write("%s\n" % l)                                                     
+f.close()

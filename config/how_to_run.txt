@@ -1,0 +1,64 @@
+This directory contains files that support source modification on a PC
+such as a Windows or Unix box, and quick deployment and testing on an EW
+tablet. Since our file locations are rapidly evolving, it is likely that
+the scripts have become stale and might require modification. This content
+was written for a Windows environment, so the shell scripts (.cmd files)
+will have to be ported to use on a Unix box.
+
+This file describes how to run the rudimentary launcher and SDK plumbing
+tests within...
+
+Create a /data/guest directory on the tablet
+--------------------------------------------
+We need a place on the tablet to conveniently keep files that are not in
+a read-only file system and that are not deleted at reboot. I created
+a directory /data/guest and made it owned by user "guest". Once done,
+this directory and its contents will live on forever. Then, create a
+subdirectory /data/guest/ew_python.
+
+Copy files to tablet
+--------------------
+The script "bin/send.cmd" uses zip to create archive files and scp to
+copy those files to tablet directory /data/guest/ew_python. Note that
+the send.cmd script uses the "pscp" command, which is part of the "putty"
+family. It is just like "scp", so if you have "scp" and not "pscp", modify
+the command name in the script. If you have neither, find another way to
+copy the ZIP files to /data/guest/ew_python on the tablet.
+
+Start up processes on tablet
+----------------------------
+After reboot of our tablet, the old-generation software is running.
+Execute these commands (aliases):
+  killds  # kill the old display server daemon
+  killnb  # kill the notebook daemon
+  killshasta  # kill a pesky daemon the prevents the new DS from starting
+If your tablet does not have a killshasta alias, here is the command to
+create it:
+  alias killshasta='sudo pkill -f "/bin/cat /dev/shasta"'
+
+I usually work with 2 ssh windows talking to the tablet, one to run the
+display server and another to run the launcher. In both shells it is
+handy to run as superuser, which I do by running the commands:
+
+  sudo bash
+  cd /data/guest/ew_python
+
+After running send.cmd to copy the new zip files to the tablet, run the
+deployment script:
+
+  sh unzipit.sh
+
+In the display server shell window, start the new DS, which will run
+indefinitely:
+
+  bin/ds.sh
+
+In the launcher shell window, run the launcher:
+
+  sh unzipit.sh && ./start_launcher.sh foreground
+
+To kill the launcher, in the launcher's window enter:
+
+  ^Z
+  kill %1  # Works so long as there are no other background processes
+           # started by this shell.

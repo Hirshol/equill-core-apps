@@ -1,0 +1,9 @@
+/xtra/recover/data/etc/wpa_supplicant.conf
+/xtra/recover/data/etc/tablet.conf
+/xtra/recover/data/etc/ewriter.conf
+/xtra/recover/data/etc/pointercal
+/xtra/recover/data/.ssh/id_rsa
+/xtra/recover/data/.ssh/id_rsa.pub
+/xtra/recover/data/.ssh/known_hosts
+
+

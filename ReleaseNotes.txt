@@ -1,0 +1,31 @@
+4-March-2011
+
+What's New:
+
+* Document round trip is functional
+
+* Tapping the Inbox button will open the inbox
+
+* Tapping on the document title, date, or status icon will open a document
+
+* Tapping on the refresh icon will trigger a sync against the server
+
+* Pressing the submit hard key will submit the open document to the server
+
+Known Issues:
+
+* There can be problems when the Inbox grows beyond the 14 documents that will fit on one page of the Inbox listing. Data and documents will not be lost or become corrupt, however the document listing itself can become inaccurate. A reboot will temporarily resolve this issue.
+
+* Button and selectable items do not "flash" when selected 
+
+* Templates Page is untested
+
+* The battery indicator icon updates during a document load only.
+In addition, the charging status is never displayed, please use the
+LED to find out whether the device is in a charging state.
+
+* Settings Page not implemented
+
+* Trash or Delete Icon not implemented
+
+* Wifi Indicator not implemented

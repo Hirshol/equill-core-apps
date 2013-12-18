@@ -1,0 +1,35 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+# ##################################################
+# This module is executed every time the tablet reboots and
+# checks to see if we have data waiting in /xtra/recover.
+# There will only be data there if this is the first time rebooting
+# after installing a new build.
+#
+# @author: Hirshol Pheir
+# @copyright: Ricoh EWS 2011
+
+import os, sys
+import subprocess as sub
+
+
+#/xtra/recover/data/etc/wpa_supplicant.conf
+#/xtra/recover/data/etc/tablet.conf
+#/xtra/recover/data/etc/ewriter.conf
+#/xtra/recover/data/etc/pointercal
+#/xtra/recover/data/.ssh/id_rsa
+#/xtra/recover/data/.ssh/id_rsa.pub
+#/xtra/recover/data/.ssh/known_hosts
+def run():
+    # put keeplist files in /xtra
+    sub.Popen('rm -rf /xtra/recover', shell=True)
+    sub.Popen('mkdir -p /xtra/recover/data/etc', shell=True)
+    sub.Popen('mkdir -p /xtra/recover/data/.ssh', shell=True)
+    sub.Popen('cp /data/etc/wpa_supplicant.conf /data/etc/tablet.conf /data/etc/ewriter.conf /data/etc/pointercal  /xtra/recover/data/etc', shell=True)
+    sub.Popen('cp /data/.ssh/id_rsa /data/.ssh/id_rsa.pub /data/.ssh/known_hosts /xtra/recover/data/.ssh', shell=True)
+    #sub.Popen('reboot', shell=True)
+
+# ##################################################
+# Run
+if __name__ == "__main__":
+    run()
